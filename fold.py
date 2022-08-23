@@ -70,7 +70,7 @@ def fold(rawfile, polyco, nchan, nbin, nblock=65536, quiet=False, pb_steps=2):
     if not quiet:
         print()
     buffer = np.fft.fftshift(buffer, axes=2)
-    buffer = buffer.reshape(4, 128, 128)
+    buffer = buffer.reshape(4, nchan, nbin)
     nseg_total = rawfile.shape[0]//nchan_per
     buffer /= nseg_total
     return buffer
