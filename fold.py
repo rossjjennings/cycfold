@@ -1,6 +1,7 @@
 import numpy as np
 import baseband
 import astropy.units as u
+import time
 
 from polyco import Polyco
 from cli import ProgressBar
@@ -94,7 +95,7 @@ if __name__ == '__main__':
     
     if not args.quiet:
         print(f"Folding data from {args.rawfile} into {args.nchan} channels and {args.nbin} phase bins...")
-    
+
     rawfile = baseband.open(args.rawfile)
     obsfreq = rawfile.header0['OBSFREQ']
     obsbw = rawfile.header0['OBSBW']
@@ -107,8 +108,11 @@ if __name__ == '__main__':
     freq_edges = obsfreq - obsbw/2 + np.arange(args.nchan + 1) * obsbw / args.nchan
     freq_centers = obsfreq - obsbw/2 + (np.arange(args.nchan) + 1/2) * obsbw / args.nchan
     phase_edges = np.linspace(0, 1, args.nbin + 1)
-    
+
+    start_time = time.perf_counter()
     buffer = fold(rawfile, polyco, args.nchan, args.nbin, args.nblock, args.quiet, pb_steps=8)
+    end_time = time.perf_counter()
+    print(f"Folding completed in {end_time - start_time:.1f} s.")
     
     if not args.quiet:
         print(f"Saving output to {args.outfile}...")
@@ -127,4 +131,5 @@ if __name__ == '__main__':
         ref_f0=ref_f0,
         tbin=tbin,
     )
+
     print("Done.")
