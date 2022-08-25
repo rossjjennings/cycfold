@@ -29,24 +29,26 @@ def fold(rawfile, polyco, nchan, nbin, nblock=65536, quiet=False, pb_steps=2):
     if (not quiet):
         progress_bar = ProgressBar(width=52, steps=pb_steps)
     while True:
-        # Read in a block of samples
-        remaining = rawfile.shape[0] - rawfile.tell()
+        # Calculate the block size and number of segments
+        pos = rawfile.tell()
+        remaining = rawfile.shape[0] - pos
         if remaining == 0:
             break
-        block = rawfile.read(min(nblock, nchan_per*(remaining//nchan_per)))
-        # block shape at this point is (nblock, npol=2, nchan_raw)
-        
-        # Divide the block into a large number of segments of length nchan_per
-        block = block.transpose(1, 2, 0).reshape(2, nchan_raw, -1, nchan_per)
-        nseg = block.shape[2] # number of segments of length nchan_per in the block
-        # new block shape is (npol=2, nchan_raw, nseg, nchan_per)
+        block_size = min(nblock, nchan_per*(remaining//nchan_per))
+        nseg = block_size//nchan_per # number of segments of length nchan_per in the block
 
         # Calculate the phase bin corresponding to each segment
-        pos = rawfile.tell()
         idx_seg = np.arange(pos + nchan_per//2, pos + nchan_per*nseg, nchan_per)
         t_seg = rawfile.start_time + idx_seg/rawfile.sample_rate
         dphs_seg = polyco.dphase(t_seg.to_value('mjd', 'long'))
         iphs_seg = np.floor(nbin*(dphs_seg % 1)).astype(np.int64)
+        
+        # Read in a block of samples of the previously calculated size
+        block = rawfile.read(block_size)
+        # block shape at this point is (nblock, npol=2, nchan_raw)
+        # Divide the block into nseg segments of length nchan_per
+        block = block.transpose(1, 2, 0).reshape(2, nchan_raw, -1, nchan_per)
+        # new block shape is (npol=2, nchan_raw, nseg, nchan_per)
 
         # Make a filterbank by taking an FFT of length nchan_per (along the last axis)
         X = np.fft.fft(block[0])
