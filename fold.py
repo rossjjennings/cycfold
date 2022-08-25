@@ -1,10 +1,29 @@
 import numpy as np
 import baseband
 import astropy.units as u
+import numba
 import time
 
 from polyco import Polyco
 from cli import ProgressBar
+
+@numba.jit(nopython=True)
+def detect_block(x, y, iphs_seg, nchan_raw, nchan_per, nseg, nbin):
+    buffer = np.zeros((4, nchan_raw, nchan_per, nbin))
+
+    # Detect and write coherence data to buffer
+    xx = np.abs(x)**2
+    yy = np.abs(y)**2
+    cc = x*np.conj(y)
+    cr = np.real(cc)
+    ci = np.imag(cc)
+    for i in range(nseg):
+        buffer[0,:,:,iphs_seg[i]] += xx[:,i]
+        buffer[1,:,:,iphs_seg[i]] += yy[:,i]
+        buffer[2,:,:,iphs_seg[i]] += cr[:,i]
+        buffer[3,:,:,iphs_seg[i]] += ci[:,i]
+
+    return buffer
 
 def fold(rawfile, polyco, nchan, nbin, nblock=65536, quiet=False, pb_steps=2):
     """
@@ -51,20 +70,9 @@ def fold(rawfile, polyco, nchan, nbin, nblock=65536, quiet=False, pb_steps=2):
         # new block shape is (npol=2, nchan_raw, nseg, nchan_per)
 
         # Make a filterbank by taking an FFT of length nchan_per (along the last axis)
-        X = np.fft.fft(block[0])
-        Y = np.fft.fft(block[1])
-        
-        # Detect and write coherence data to buffer
-        XX = np.abs(X)**2
-        YY = np.abs(Y)**2
-        CC = X*np.conj(Y)
-        CR = np.real(CC)
-        CI = np.imag(CC)
-        for i in range(nseg):
-            buffer[0,:,:,iphs_seg[i]] += XX[:,i]
-            buffer[1,:,:,iphs_seg[i]] += YY[:,i]
-            buffer[2,:,:,iphs_seg[i]] += CR[:,i]
-            buffer[3,:,:,iphs_seg[i]] += CI[:,i]
+        x = np.fft.fft(block[0])
+        y = np.fft.fft(block[1])
+        buffer = detect_block(x, y, iphs_seg, nchan_raw, nchan_per, nseg, nbin)
 
         if not quiet:
             progress = rawfile.tell()/rawfile.shape[0]
