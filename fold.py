@@ -72,7 +72,7 @@ def fold(rawfile, polyco, nchan, nbin, nblock=65536, quiet=False, pb_steps=2):
         # Make a filterbank by taking an FFT of length nchan_per (along the last axis)
         x = np.fft.fft(block[0])
         y = np.fft.fft(block[1])
-        buffer = detect_block(x, y, iphs_seg, nchan_raw, nchan_per, nseg, nbin)
+        buffer += detect_block(x, y, iphs_seg, nchan_raw, nchan_per, nseg, nbin)
 
         if not quiet:
             progress = rawfile.tell()/rawfile.shape[0]
