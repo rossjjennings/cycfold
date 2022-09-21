@@ -56,7 +56,6 @@ def half_corr(x, y):
         corr /= (n-1)//2
     return corr
 
-@numba.jit(nopython=True)
 def corr_from_block(block, iphs_seg, nchan_raw, ncyc, nbin):
     nseg = iphs_seg.shape[0]
     corr = np.zeros((4, nchan_raw, 2*ncyc + 1, nbin), dtype=np.complex128)
@@ -69,10 +68,10 @@ def corr_from_block(block, iphs_seg, nchan_raw, ncyc, nbin):
             cc = np.fft.fftshift(np.fft.fft(half_corr(x, y)))
             cr = cc.real
             ci = cc.imag
-            corr[0, i, :, iphs_seg[i]] += xx
-            corr[1, i, :, iphs_seg[i]] += yy
-            corr[2, i, :, iphs_seg[i]] += cr
-            corr[3, i, :, iphs_seg[i]] += ci
+            corr[0, i, :, iphs_seg[j]] += xx
+            corr[1, i, :, iphs_seg[j]] += yy
+            corr[2, i, :, iphs_seg[j]] += cr
+            corr[3, i, :, iphs_seg[j]] += ci
     return corr
 
 def fold(rawfile, polyco, ncyc, nbin, nblock=65536, quiet=False, pb_steps=2):
@@ -93,7 +92,7 @@ def fold(rawfile, polyco, ncyc, nbin, nblock=65536, quiet=False, pb_steps=2):
     """
     obslen = (rawfile.shape[0]/rawfile.sample_rate).to(u.s) # Length of observation in seconds
     nchan_raw = rawfile.shape[2]  # number of voltage channels in the raw file
-    buffer = np.zeros((3, nchan_raw, 2*ncyc + 1, nbin), dtype=np.complex128) # polarizations, filterbank channels, cyclic channels, bins
+    buffer = np.zeros((4, nchan_raw, 2*ncyc + 1, nbin), dtype=np.complex128) # polarizations, filterbank channels, cyclic channels, bins
     if (not quiet):
         progress_bar = ProgressBar(width=52, steps=pb_steps)
     while True:
