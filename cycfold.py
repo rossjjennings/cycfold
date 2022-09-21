@@ -24,54 +24,55 @@ def half_corr(x, y):
     out_dtype = (x[0:1]*y[0:1]).dtype
     if n % 2 == 0:
         corr = np.zeros(n + 1, dtype=out_dtype)
-        
+
         #narrow
         for i in range(n//2 + 1):
             for j in range(n//2):
                 corr[2*i] += x[i + j]*np.conj(y[n//2 - i + j])
-        
+
         #wide
         for i in range(n//2):
             corr[2*i + 1] += x[i]*np.conj(y[n//2 - 1 - i])/2 # half of j=0 term
             for j in range(1, n//2):
                 corr[2*i + 1] += x[i + j]*np.conj(y[n//2 - 1 - i + j])
             corr[2*i + 1] += x[n//2 + i]*np.conj(y[n - 1 - i])/2 # half of j=n//2 term
-        
+
         corr /= n//2
     else:
         corr = np.zeros(n, dtype=out_dtype)
-        
+
         #wide
         for i in range((n+1)//2):
             corr[2*i] += x[i]*np.conj(y[(n-1)//2 - i])/2 # half of j=0 term
             for j in range(1, (n-1)//2):
                 corr[2*i] += x[i + j]*np.conj(y[(n-1)//2 - i + j])
             corr[2*i] += x[(n-1)//2 + i]*np.conj(y[n - 1 - i])/2 # half of j=(n-1)//2 term
-        
+
         #narrow
         for i in range((n-1)//2):
             for j in range((n-1)//2):
                 corr[2*i + 1] += x[1 + i + j]*np.conj(y[(n-1)//2 - i + j])
-        
+
         corr /= (n-1)//2
     return corr
 
 @numba.jit(nopython=True)
 def corr_from_block(block, iphs_seg, nchan_raw, ncyc, nbin):
     nseg = iphs_seg.shape[0]
-    corr = np.zeros((3, nchan_raw, 2*ncyc + 1, nbin), dtype=np.complex128)
+    corr = np.zeros((4, nchan_raw, 2*ncyc + 1, nbin), dtype=np.complex128)
     for i in range(nchan_raw):
         for j in range(nseg):
             x = block[j, :, 0, i]
             y = block[j, :, 1, i]
-            xx = half_corr(x, x)
-            yy = half_corr(y, y)
-            cc = half_corr(x, y)
-            cr = np.real(cc)
-            ci = np.imag(cc)
+            xx = np.fft.fftshift(np.fft.fft(half_corr(x, x)))
+            yy = np.fft.fftshift(np.fft.fft(half_corr(y, y)))
+            cc = np.fft.fftshift(np.fft.fft(half_corr(x, y)))
+            cr = cc.real
+            ci = cc.imag
             corr[0, i, :, iphs_seg[i]] += xx
             corr[1, i, :, iphs_seg[i]] += yy
-            corr[2, i, :, iphs_seg[i]] += cc
+            corr[2, i, :, iphs_seg[i]] += cr
+            corr[3, i, :, iphs_seg[i]] += ci
     return corr
 
 def fold(rawfile, polyco, ncyc, nbin, nblock=65536, quiet=False, pb_steps=2):
