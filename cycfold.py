@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.signal
 import baseband
 import astropy.units as u
 import numba
@@ -6,73 +7,6 @@ import time
 
 from polyco import Polyco
 from cli import ProgressBar
-
-@numba.jit(nopython=True)
-def half_corr(x, y):
-    """
-    Calculate the "half correlation" between two arrays of the same length.
-    This is an estimate of the cross-correlation computed only at lags for which
-    the arrays overlap by at least half their length (rounded down). When the length,
-    n, is even, there are n+1 lags with this property; when it is odd, there are n.
-    The effective number of samples averaged for each lag is equal to the minimum
-    overlap; for every other lag, this means that two boundary samples have to be
-    weighted by 1/2.
-    """
-    if y.size != x.size:
-        raise ValueError("sizes of x and y do not match")
-    n = x.size
-    out_dtype = (x[0:1]*y[0:1]).dtype
-    if n % 2 == 0:
-        corr = np.zeros(n + 1, dtype=out_dtype)
-
-        #narrow
-        for i in range(n//2 + 1):
-            for j in range(n//2):
-                corr[2*i] += x[i + j]*np.conj(y[n//2 - i + j])
-
-        #wide
-        for i in range(n//2):
-            corr[2*i + 1] += x[i]*np.conj(y[n//2 - 1 - i])/2 # half of j=0 term
-            for j in range(1, n//2):
-                corr[2*i + 1] += x[i + j]*np.conj(y[n//2 - 1 - i + j])
-            corr[2*i + 1] += x[n//2 + i]*np.conj(y[n - 1 - i])/2 # half of j=n//2 term
-
-        corr /= n//2
-    else:
-        corr = np.zeros(n, dtype=out_dtype)
-
-        #wide
-        for i in range((n+1)//2):
-            corr[2*i] += x[i]*np.conj(y[(n-1)//2 - i])/2 # half of j=0 term
-            for j in range(1, (n-1)//2):
-                corr[2*i] += x[i + j]*np.conj(y[(n-1)//2 - i + j])
-            corr[2*i] += x[(n-1)//2 + i]*np.conj(y[n - 1 - i])/2 # half of j=(n-1)//2 term
-
-        #narrow
-        for i in range((n-1)//2):
-            for j in range((n-1)//2):
-                corr[2*i + 1] += x[1 + i + j]*np.conj(y[(n-1)//2 - i + j])
-
-        corr /= (n-1)//2
-    return corr
-
-def corr_from_block(block, iphs_seg, nchan_raw, ncyc, nbin):
-    nseg = iphs_seg.shape[0]
-    corr = np.zeros((4, nchan_raw, 2*ncyc + 1, nbin), dtype=np.complex128)
-    for i in range(nchan_raw):
-        for j in range(nseg):
-            x = block[j, :, 0, i]
-            y = block[j, :, 1, i]
-            xx = np.fft.fftshift(np.fft.fft(half_corr(x, x)))
-            yy = np.fft.fftshift(np.fft.fft(half_corr(y, y)))
-            cc = np.fft.fftshift(np.fft.fft(half_corr(x, y)))
-            cr = cc.real
-            ci = cc.imag
-            corr[0, i, :, iphs_seg[j]] += xx
-            corr[1, i, :, iphs_seg[j]] += yy
-            corr[2, i, :, iphs_seg[j]] += cr
-            corr[3, i, :, iphs_seg[j]] += ci
-    return corr
 
 def fold(rawfile, polyco, ncyc, nbin, nblock=65536, quiet=False, pb_steps=2):
     """
@@ -91,8 +25,8 @@ def fold(rawfile, polyco, ncyc, nbin, nblock=65536, quiet=False, pb_steps=2):
               Depending on font support, values above 2 might not display as intended.
     """
     obslen = (rawfile.shape[0]/rawfile.sample_rate).to(u.s) # Length of observation in seconds
-    nchan_raw = rawfile.shape[2]  # number of voltage channels in the raw file
-    buffer = np.zeros((4, nchan_raw, 2*ncyc + 1, nbin), dtype=np.complex128) # polarizations, filterbank channels, cyclic channels, bins
+    nchan_pfb = rawfile.shape[2]  # number of voltage channels in the raw file
+    buffer = np.zeros((4, nchan_pfb, 2*ncyc, nbin), dtype=np.complex128) # polarizations, filterbank channels, cyclic channels, bins
     if (not quiet):
         progress_bar = ProgressBar(width=52, steps=pb_steps)
     while True:
@@ -112,20 +46,34 @@ def fold(rawfile, polyco, ncyc, nbin, nblock=65536, quiet=False, pb_steps=2):
         
         # Read in a block of samples of the previously calculated size
         block = rawfile.read(block_size)
-        # block shape at this point is ((nseg + 1)*ncyc, npol=2, nchan_raw)
+        # block shape at this point is ((nseg + 1)*ncyc, npol=2, nchan_pfb)
         npol = 2
         # Divide the block into nseg segments of length 2*ncyc, overlapping by ncyc
         s = block.dtype.itemsize
         block = np.lib.stride_tricks.as_strided(
             block,
-            shape=(nseg, 2*ncyc, npol, nchan_raw),
-            strides=(ncyc*npol*nchan_raw*s, npol*nchan_raw*s, nchan_raw*s, s),
+            shape=(nseg, 2*ncyc, npol, nchan_pfb),
+            strides=(ncyc*npol*nchan_pfb*s, npol*nchan_pfb*s, nchan_pfb*s, s),
         )
-        # new block shape is (npol=2, nchan_raw, nseg, nchan_per)
+        # new block shape is (nseg, 2*ncyc, npol=2, nchan_pfb)
+        block = block.transpose(2, 3, 0, 1)
+        # new block shape is (npol=2, nchan_pfb, nseg, 2*ncyc)
 
-        # Make a filterbank by taking an FFT of length nchan_per (along the last axis)
-        output = corr_from_block(block, iphs_seg, nchan_raw, ncyc, nbin)
-        buffer += output
+        # Calculate the correlation function
+        for i in range(nchan_pfb):
+            for j in range(nseg):
+                x = block[0, i, j]
+                y = block[0, i, j]
+                Rxx = scipy.signal.correlate(x[ncyc:], x, mode='valid')
+                Ryy = scipy.signal.correlate(y[ncyc:], y, mode='valid')
+                Rxy = scipy.signal.correlate(x[ncyc:], y, mode='valid') # TODO: fix this
+                Cxx = np.fft.fftshift(np.fft.hfft(Rxx))
+                Cyy = np.fft.fftshift(np.fft.hfft(Ryy))
+                Cxy = np.fft.fftshift(np.fft.hfft(Rxy))
+                buffer[0, i, :, iphs_seg[j]] += np.abs(Cxx)**2
+                buffer[1, i, :, iphs_seg[j]] += np.abs(Cyy)**2
+                buffer[2, i, :, iphs_seg[j]] += Cxy.real
+                buffer[3, i, :, iphs_seg[j]] += Cxy.imag
 
         if not quiet:
             progress = rawfile.tell()/rawfile.shape[0]
@@ -135,6 +83,7 @@ def fold(rawfile, polyco, ncyc, nbin, nblock=65536, quiet=False, pb_steps=2):
         print()
     nseg_total = rawfile.shape[0]//ncyc - 1
     buffer /= nseg_total
+    buffer = buffer.reshape(4, 2*nchan_pfb*ncyc, nbin)
     return buffer
 
 if __name__ == '__main__':
@@ -142,7 +91,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-q', '--quiet', action='store_true', help="don't display progress messages")
     parser.add_argument('-P', dest='predictor', type=str, help="phase predictor (polyco file) to be used for folding")
-    parser.add_argument('-c', dest='ncyc', type=int, help="number of cyclic channels to create will be twice this, plus one")
+    parser.add_argument('-c', dest='ncyc', type=int, help="number of cyclic channels to create will be twice this")
     parser.add_argument('-b', dest='nbin', type=int, help="number of phase bins in folded profile")
     parser.add_argument('-B', dest='nblock', type=int, default=65536, help="number of samples to read at a time (default: 65536).")
     parser.add_argument('-O', dest='outfile', type=str, help="where to save output (.npz)")
@@ -155,7 +104,7 @@ if __name__ == '__main__':
     polyco = polycos[0]
     
     if not args.quiet:
-        print(f"Folding data from {args.rawfile} into cyclic spectrum with {2*args.ncyc + 1} channels and {args.nbin} phase bins...")
+        print(f"Folding data from {args.rawfile}.")
 
     rawfile = baseband.open(args.rawfile)
     obsfreq = rawfile.header0['OBSFREQ']
@@ -166,9 +115,14 @@ if __name__ == '__main__':
     mjd_stop = rawfile.stop_time.to_value('mjd', 'long')
     ref_f0 = polyco.f0((mjd_start + mjd_stop)/2)
     tbin = float(1/(args.nbin*ref_f0))
-    freq_edges = obsfreq - obsbw/2 + np.arange(2*args.ncyc + 2) * obsbw / (2*args.ncyc + 1)
-    freq_centers = obsfreq - obsbw/2 + (np.arange(2*args.ncyc + 1) + 1/2) * obsbw / (2*args.ncyc + 1)
+    nchan_pfb = rawfile.shape[2]
+    nchan = 2*args.ncyc*nchan_pfb
+    freq_edges = obsfreq - obsbw/2 + np.arange(nchan + 1) * obsbw / nchan
+    freq_centers = obsfreq - obsbw/2 + (np.arange(nchan) + 1/2) * obsbw / nchan
     phase_edges = np.linspace(0, 1, args.nbin + 1)
+
+    if not args.quiet:
+        print(f"Creating cyclic spectrum with {nchan} channels and {args.nbin} phase bins...")
 
     start_time = time.perf_counter()
     buffer = fold(rawfile, polyco, args.ncyc, args.nbin, args.nblock, args.quiet, pb_steps=8)
