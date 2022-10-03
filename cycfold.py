@@ -83,6 +83,7 @@ def fold(rawfile, polyco, ncyc, nbin, nblock=65536, quiet=False, pb_steps=2):
         print()
     nseg_total = rawfile.shape[0]//ncyc - 1
     buffer /= nseg_total
+    buffer = buffer.reshape(4, 2*nchan_pfb*ncyc, nbin)
     return buffer
 
 if __name__ == '__main__':
